@@ -1,18 +1,25 @@
 # Note that this script can accept some limited command-line arguments, run
 # `julia build_tarballs.jl --help` to see a usage message.
 using BinaryBuilder, Pkg
+const YGGDRASIL_DIR = "../.."
+include(joinpath(YGGDRASIL_DIR, "platforms", "macos_sdks.jl"))
+# include(joinpath(YGGDRASIL_DIR, "platforms", "mpi.jl"))
 
 name = "Exodus"
-version = v"9.4.0"
+version = v"9.6.0"
 
 # Collection of sources required to complete build
 sources = [
-    GitSource("https://github.com/gsjaardema/seacas.git", "2f0c364b145df6fb8ac5cb29f80a72b24732b7f4"),
+    GitSource("https://github.com/sandialabs/seacas", "86638545f4f7a616ecfb10016865a18373c87611"),
     DirectorySource("bundled")
 ]
 
 # Bash recipe for building across all platforms
 script = raw"""
+# export MPITRAMPOLINE_CC="${CC}"
+# export MPITRAMPOLINE_CXX="${CXX}"
+# export MPITRAMPOLINE_FC="${FC}"
+
 # below needed to use CMake_jll
 apk del cmake
 
@@ -26,18 +33,16 @@ mkdir build
 cd build
 
 cmake \
-    -DCMAKE_INSTALL_PREFIX=${prefix} \
-    -DCMAKE_TOOLCHAIN_FILE=${CMAKE_TARGET_TOOLCHAIN} \
-    -DCMAKE_BUILD_TYPE=Release \
+    -D CMAKE_INSTALL_PREFIX=${prefix} \
+    -D CMAKE_TOOLCHAIN_FILE=${CMAKE_TARGET_TOOLCHAIN} \
+    -D CMAKE_BUILD_TYPE=Release \
     \
-    -D CMAKE_CXX_FLAGS="-Wall -Wunused -pedantic" \
-    -D CMAKE_C_FLAGS="-Wall -Wunused -pedantic -std=c11" \
-    -D CMAKE_Fortran_FLAGS="" \
     -D Seacas_ENABLE_STRONG_C_COMPILE_WARNINGS="" \
     -D Seacas_ENABLE_STRONG_CXX_COMPILE_WARNINGS="" \
     -D CMAKE_INSTALL_RPATH:PATH="${libdir}" \
     -D BUILD_SHARED_LIBS:BOOL=YES \
     -D Seacas_ENABLE_SEACASExodus=YES \
+    -D Seacas_ENABLE_SEACASExodus_cpp=YES \
     -D Seacas_ENABLE_SEACASExodus_for=NO \
     -D Seacas_ENABLE_SEACASExoIIv2for32=NO \
     -D Seacas_ENABLE_TESTS=NO \
@@ -46,12 +51,14 @@ cmake \
     -D Seacas_HIDE_DEPRECATED_CODE:BOOL=NO \
     -D Seacas_ENABLE_Fortran=NO \
     \
-    -DSeacas_ENABLE_SEACASNemslice:BOOL=ON \
-    -DSeacas_ENABLE_SEACASNemspread:BOOL=ON \
-    \
-    -DSeacas_ENABLE_SEACASEpu:BOOL=ON \
-    \
-    -DSeacas_ENABLE_SEACASExodiff:BOOL=ON \
+    -D Seacas_ENABLE_SEACASEjoin::BOOL=OFF \
+    -D Seacas_ENABLE_SEACASEpu:BOOL=ON \
+    -D Seacas_ENABLE_SEACASExodiff:BOOL=ON \
+    -D Seacas_ENABLE_SEACASIoss:BOOL=OFF \
+    -D Seacas_ENABLE_SEACASNemslice:BOOL=ON \
+    -D Seacas_ENABLE_SEACASNemspread:BOOL=ON \
+    -D Seacas_ENABLE_SEACASSkinner:BOOL=OFF \
+    -D Seacas_ENABLE_Zoltan:BOOL=OFF \
     \
     -D TPL_ENABLE_Netcdf:BOOL=YES \
     -D TPL_ENABLE_MPI:BOOL=NO \
@@ -79,6 +86,14 @@ make install
 rm -r "${prefix}/lib/cmake/Seacas"
 """
 
+sources, script = require_macos_sdk("14.0", sources, script)
+
+# augment_platform_block = """
+# using Base.BinaryPlatforms
+# $(MPI.augment)
+# augment_platform!(platform::Platform) = augment_mpi!(platform)
+# """
+
 # These are the platforms we will build for by default, unless further
 # platforms are passed in on the command line
 platforms = [
@@ -91,6 +106,7 @@ platforms = [
 ]
 
 platforms = expand_cxxstring_abis(platforms)
+# platforms, platform_dependencies = MPI.augment_platforms(platforms)
 
 # The products that we will ensure are always built
 products = [
@@ -99,16 +115,26 @@ products = [
     ExecutableProduct("exodiff", :exodiff_exe)
     ExecutableProduct("nem_slice", :nem_slice_exe)
     ExecutableProduct("nem_spread", :nem_spread_exe)
+    # ExecutableProduct("skinner", :skinner_exe)
 ]
 
 # Dependencies that must be installed before this package can be built
 dependencies = [
     Dependency(PackageSpec(name="Fmt_jll", uuid="5dc1e892-f187-50dd-85f3-7dff85c47fc5"))
-    Dependency(PackageSpec(name="HDF5_jll", uuid="0234f1f7-429e-5d53-9886-15a909be8d59"); compat="1.14.6 - 1.14")
+    Dependency(PackageSpec(name="HDF5_jll", uuid="0234f1f7-429e-5d53-9886-15a909be8d59"))
     Dependency(PackageSpec(name="NetCDF_jll", uuid="7243133f-43d8-5620-bbf4-c2c921802cf3"))
     Dependency(PackageSpec(name="Zlib_jll", uuid="83775a58-1f1d-513f-b197-d71354ab007a"))
     HostBuildDependency(PackageSpec(name="CMake_jll", uuid="3f4e10e2-61f2-5801-8945-23b9d642d0e6"))
 ]
+# append!(dependencies, platform_dependencies)
+
+# Don't look for `mpiwrapper.so` when BinaryBuilder examines and `dlopen`s the shared libraries.
+# (MPItrampoline will skip its automatic initialization.)
+# ENV["MPITRAMPOLINE_DELAY_INIT"] = "1"
 
 # Build the tarballs, and possibly a `build.jl` as well.
-build_tarballs(ARGS, name, version, sources, script, platforms, products, dependencies; julia_compat="1.6", preferred_gcc_version=v"9")
+build_tarballs(
+    ARGS, name, version, sources, script, platforms, products, dependencies;
+    # augment_platform_block,
+    julia_compat="1.6", preferred_gcc_version=v"9"
+)
